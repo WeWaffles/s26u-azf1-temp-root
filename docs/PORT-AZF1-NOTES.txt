@@ -1,0 +1,183 @@
+================================================================================
+M3Q ROOT AZF1 PORT — PROJECT REPORT
+Temporary KernelSU root for Galaxy S26 Ultra SM-S948U, firmware S948USQS3AZF1
+Author: built with Muse Spark (opencode) | Date: 2026-09-10
+================================================================================
+
+1. RESULT
+--------------------------------------------------------------------------------
+Status: WORKING. The phone (SM-S948U, BP4A.251205.006.S948USQS3AZF1, kernel
+6.12.30-android16-5-pd30ff70-abogkiS948USQS3AZF1-4k) achieved temporary
+RAM-only KernelSU root via the M3Q Root AZF1 v0.5.8-azf1 app (English UI).
+Root is per-boot: a real reboot removes it; re-running the app re-roots in
+~2 minutes. Knox is tripped permanently (0x1) as of first success.
+
+2. BACKGROUND
+--------------------------------------------------------------------------------
+The starting point was UniRoot (kuuky29/UniRoot), a one-click root app whose
+bundled S26 Ultra profile targets kernel 6.12.69. Our device runs 6.12.30,
+and the Root-My-Galaxy payload feed contained no S948 / 6.12.x entries, so
+no auto-downloaded profile existed.
+
+First attempt: cloned UniRoot, added an "S26 Ultra 6.12.30 AZF1" profile
+reusing the ZZHK binaries, built the APK (JDK 21, SDK 37), installed it.
+Result: deterministic failure in KASLR disclosure —
+  "slide tracefs worker caller not found".
+The bundled payload self-identified as target=h8q-F9710ZSS2AZH7 (a different
+board; ours is m3q). Retries could never fix it. Porting UniRoot further
+would have required rebuilding its closed exploit binary — dead end.
+
+The working path came from monovibe/s26u-m3q-temp-root: a temp-root app for
+the SAME board (m3q), SAME Android build (BP4A.251205.006) and SAME kernel
+base (6.12.30-android16-5-pd30ff70), but for the Korean SM-S948N/AZG3
+firmware — with FULL native source. An XDA thread confirmed the author
+re-derives per firmware ("need your boot.img plus logs; N->U reuse fails").
+
+3. HOW THE EXPLOIT WORKS (CVE-2026-43499 chain)
+--------------------------------------------------------------------------------
+1. EXACT GATE (Java + native): model + fingerprint + kernel release must
+   match exactly, or every kernel action stays disabled. Fail-closed.
+2. PER-BOOT CLAIM: one fresh kernel-write attempt per boot ID + 180 s
+   uptime settle gate. A failed/unclear run keeps the claim: reboot first.
+3. KASLR SLIDE: preferred route is Shizuku (shell UID 2000) tracefs worker
+   disclosure; fallback is a physical-P0 oracle matched against a 32-row
+   fingerprint sampled from the exact kernel image.
+4. KERNEL R/W: dangling PI-waiter condition, order-3 reclaim, pselect-based
+   oracle, /dev/uinput + misc carriers, bounded preflight verdicts before
+   any carrier write.
+5. ROOT BRIDGE: a usermode-helper work item queued on system_unbound_wq
+   execs the helper binary as root. The helper starts a UID-restricted
+   Unix-socket daemon (only the launching app UID may connect).
+6. KERNELSU LATE-LOAD: the daemon stages a hash-pinned ksud, bind-mounts it
+   over /system/bin/logcat in a private mount namespace (DEFEX-compatible),
+   and requests late-load of the android16-6.12 LKM. KernelSU Manager then
+   owns per-app grants. Module reload + soft boot (Zygote restart) re-attach
+   Zygisk/LSPosed.
+
+4. WHAT THE PORT REQUIRED (and the evidence behind it)
+--------------------------------------------------------------------------------
+The U kernel image was obtained from official Samsung firmware:
+  asgard-fus (modern FUS client) -> S948USQS3AZF1 full version string from
+  FUS history -> downloaded only the AP archive -> extracted boot.img.lz4
+  -> decompressed (lz4) -> carved the 41 MB ARM64 Image (magic + embedded
+  release string verified, sha256 d8aaf115...).
+
+The N (AZG3) reference image was fetched the same way; its hash matched the
+upstream target pin exactly, confirming it as ground truth.
+
+Binary diff N vs U (same size, 1.49% bytes differ, mostly kallsyms tables,
+version strings and variant drivers) followed by per-symbol comparison:
+  - ALL ~30 code/data offsets used by the exploit are byte-identical
+    between the images (0-diff windows: configfs/mchanges, simple_attr,
+    debugfs u64, llseek, UMH workqueue, ashmem, misc/uinput, init_task,
+    workqueue structs, P0 probe region 31/32 rows identical).
+  - The few 1-3 byte diffs inside functions decode as ADD-immediate
+    page-offset constants (same code, microscopically shifted data) —
+    harmless: absolute addresses are verified per symbol, relative code
+    self-adjusts.
+  - Live geometry confirmed on-device via /proc/slabinfo
+    (task_struct=5696, kmalloc-192 present for the pipe carrier).
+
+Conclusion: same source + config + compiler; only identity strings, hashes
+and the P0 table are per-build. No offset re-derivation was needed.
+
+U target deltas (everything else transfers verbatim):
+  - Fingerprint : samsung/m3qsqw/m3q:16/BP4A.251205.006/S948USQS3AZF1_OYN3AZF1:user/release-keys
+  - Incremental : S948USQS3AZF1
+  - Kernel      : 6.12.30-android16-5-pd30ff70-abogkiS948USQS3AZF1-4k
+  - Image SHA   : d8aaf115aaed7aaeb8e784a0ad09b13cb7efcfcd16a6238e1c4e443454e0d2f5
+  - P0 fingerprint: 32 rows regenerated mechanically from the U image
+    (row = 8 u64 words at 0x000..0xe00 step 0x200 from Image[0x1f0000-slide])
+  - Tmp paths renamed azg3->azf1 (UMH path, ksud loader path, log, socket,
+    overlay root) so the port coexists with the upstream N app.
+  - ksud binary REUSED (same android16-6.12 KMI; SHA pin verified identical).
+
+5. BUGS FOUND AND FIXED DURING THE PORT
+--------------------------------------------------------------------------------
+a) SOCKET-PATH MISMATCH (mine, fatal to run #1): renaming the daemon socket
+   to temp_su_azf1.sock without updating the payload's poll path left the
+   payload checking the nonexistent temp_su.sock -> false socket=0 ->
+   rc=2 + keepers, while the daemon was actually up and serving. Fixed by
+   pointing the payload at the azf1 socket; verified absent/present in the
+   built binaries. Lesson: every rendezvous path must agree on both ends;
+   the next failure mode would have been invisible without the errno log.
+b) Unexplained silent daemon + late-load worker deaths on run #1 remain
+   PARTIALLY unexplained (no crash, kill, denial or RKP trace in 49 MB of
+   logcat; LMK/OOM ruled out; no reboot occurred). v0.5.8-azf1 adds a
+   daemon flight recorder (/data/local/tmp/m3q-azf1-daemon.trace) and
+   per-step worker markers plus socket connect-errno reporting, so any
+   recurrence is attributable instead of mysterious.
+c) ksud-as-app dies instantly on this firmware (SIGSYS on reboot(2)):
+   Samsung's untrusted_app seccomp kills it. Observed via KernelSU
+   Manager's own bundled ksud flailing. Consequence: the app's module
+   reload / soft-boot path (which runs ksud as the app user) cannot work
+   until a root daemon exists to run those operations as root. Pre-root
+   failures there are EXPECTED, not a bug in the port.
+
+6. REPRODUCING THE BUILD
+--------------------------------------------------------------------------------
+Prereqs: JDK 17+ (21 used), Android SDK 37 (+ build-tools 37),
+NDK 29.0.14206865 (side-by-side under Sdk/ndk), Python 3 + pip packages:
+asgard-fus, lz4, numpy, capstone (analysis only).
+
+  cd s26u-m3q-temp-root/android
+  .\build-native.ps1 -Target AZF1     # helper+oracle+payload -> exploit/build/m3q-S948USQS3AZF1/bin
+  .\test-safety-policy.ps1            # RootSafetyPolicy + LogRedactor unit tests
+  .\gradlew.bat --no-daemon :app:lintRelease :app:assembleRelease
+  # -> android/app/build/outputs/apk/release/app-release.apk
+  adb install -r app-release.apk
+
+Notes: JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true was needed on this
+machine (broken IPv6 egress hangs Java networking); local.properties with
+escaped sdk.dir (sdk.dir=C\:/...) is required and gitignored; AZG3 (N)
+build path is preserved via -Target AZG3 with byte-identical behavior.
+
+First run on device: Shizuku running + approved, KernelSU Manager
+installed, 180 s+ uptime, tap once. On success: bootstrap -> staging ->
+late-load -> Manager shows Working. Then module reload + soft boot.
+
+7. OPERATING NOTES / GOTCHAS
+--------------------------------------------------------------------------------
+- NEVER update the firmware: the port is pinned to SQS3AZF1 exactly
+  (gate strings + image hash + P0 table). Any OTA = new port.
+- Keep the KernelSU driver at 32525 (what late-load installs). Manager-app
+  updates are tolerable but prefer a 325xx-era Manager to avoid
+  manager/driver mismatch banners and protocol papercuts.
+- Do NOT run ksud directly as the app/shell user on this firmware; it is
+  seccomp-killed (reboot syscall). All privileged operations go through
+  the root daemon while it lives.
+- The per-boot claim means exactly one fresh kernel-write attempt per
+  boot; unclear runs require a real reboot before retrying.
+- /data/local/tmp leftovers (stale socket, staged ksud) are recreated or
+  unlinked by each run; UniRoot-era files (cve.so etc.) are inert.
+- Network notes for rebuilds: github.com:443 is blocked on this machine;
+  codeload.github.com, dl.google.com, pypi, services.gradle.org and
+  Samsung FUS all work (prefer curl/BITS with resume for large files).
+
+8. FILE MAP
+--------------------------------------------------------------------------------
+Default Project/
+  UniRoot/                        first (failed) UniRoot port attempt + APK
+  s26u-m3q-temp-root/             the working port (fork of monovibe repo)
+    exploit/src/targets/m3q-S948USQS3AZF1/   U payload target (target.h + sources)
+    exploit/vendor/.../targets/m3q-S948USQS3AZF1/  U oracle target + P0 table
+    exploit/src/su_daemon.c       + path -D overrides, daemon flight recorder
+    android/build-native.ps1/.sh  -Target AZG3|AZF1 selection
+    android/app/...               U gate strings, azf1 paths, full English UI,
+                                  applicationId dev.indevelopment.m3qroot.azf1
+    android/app/build/outputs/apk/release/app-release.apk  shippable APK
+  AZF1-PORT-REPORT.txt            this file
+
+9. CREDITS / DISCLAIMER
+--------------------------------------------------------------------------------
+Exploit + app architecture: monovibe (s26u-m3q-temp-root) building on
+Root-My-Galaxy payloads (BuSung-dev), KernelSU (tiann), Shizuku (RikkaApps).
+First S26U analysis scaffolding: kuuky29/UniRoot. U-firmware derivation,
+verification, port, translation and this report: Muse Spark session.
+
+Rooting trips Knox permanently and can bootloop a device if firmware or
+offsets mismatch. Everything here is pinned to ONE exact build
+(S948USQS3AZF1); do not run it — or adapt it — for any other firmware
+without re-deriving and re-verifying every per-image value the way
+section 4 describes.
+================================================================================
