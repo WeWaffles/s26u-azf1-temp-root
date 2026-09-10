@@ -14,6 +14,8 @@ identity strings, the image hash and the P0 fingerprint are per-build.
 See `docs/PORT-AZF1-NOTES.txt` for the full porting report. UI translated
 to English.
 
+fyi this was done with ai because I'm a lazy bum
+
 ## Supported target
 
 | Field | Required value |
