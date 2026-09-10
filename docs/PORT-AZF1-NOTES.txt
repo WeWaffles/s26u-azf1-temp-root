@@ -10,7 +10,9 @@ Status: WORKING. The phone (SM-S948U, BP4A.251205.006.S948USQS3AZF1, kernel
 6.12.30-android16-5-pd30ff70-abogkiS948USQS3AZF1-4k) achieved temporary
 RAM-only KernelSU root via the M3Q Root AZF1 v0.5.8-azf1 app (English UI).
 Root is per-boot: a real reboot removes it; re-running the app re-roots in
-~2 minutes. Knox is tripped permanently (0x1) as of first success.
+~2 minutes. Nothing is unlocked or flashed, so the Knox warranty bit stays
+intact; Knox-dependent apps may still refuse to run while rooted and work
+again after a reboot.
 
 2. BACKGROUND
 --------------------------------------------------------------------------------
@@ -175,7 +177,8 @@ Root-My-Galaxy payloads (BuSung-dev), KernelSU (tiann), Shizuku (RikkaApps).
 First S26U analysis scaffolding: kuuky29/UniRoot. U-firmware derivation,
 verification, port, translation and this report: Muse Spark session.
 
-Rooting trips Knox permanently and can bootloop a device if firmware or
+This method unlocks nothing and flashes nothing, so the Knox warranty bit
+is not tripped; a mismatched firmware can still bootloop a device if
 offsets mismatch. Everything here is pinned to ONE exact build
 (S948USQS3AZF1); do not run it — or adapt it — for any other firmware
 without re-deriving and re-verifying every per-image value the way
