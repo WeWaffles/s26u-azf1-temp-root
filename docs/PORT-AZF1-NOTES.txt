@@ -145,6 +145,12 @@ late-load -> Manager shows Working. Then module reload + soft boot.
 - Keep the KernelSU driver at 32525 (what late-load installs). Manager-app
   updates are tolerable but prefer a 325xx-era Manager to avoid
   manager/driver mismatch banners and protocol papercuts.
+- 2026-09-11: tried upstream v3.3.0/32601 (ksud-aarch64-linux-android +
+  Manager). The 32601 LKM panicked the AZF1 kernel during late-load with
+  zero output; post-reboot the staged copies read back all-zeros (page
+  cache lost in the crash, not the cause). Rolled back to the 32525 pair
+  (driver restored from git, Manager reinstalled v3.2.5). Do NOT retry
+  32601 on this kernel without a newer upstream fix.
 - Do NOT run ksud directly as the app/shell user on this firmware; it is
   seccomp-killed (reboot syscall). All privileged operations go through
   the root daemon while it lives.

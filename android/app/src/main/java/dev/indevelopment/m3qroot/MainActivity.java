@@ -1,16 +1,23 @@
 package dev.indevelopment.m3qroot;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Insets;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.window.OnBackInvokedDispatcher;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.text.method.ScrollingMovementMethod;
 
@@ -18,9 +25,15 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.color.DynamicColors;
+import com.google.android.material.color.MaterialColors;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
+import com.google.android.material.switchmaterial.SwitchMaterial;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
@@ -34,6 +47,9 @@ public final class MainActivity extends AppCompatActivity {
     private static final int SHIZUKU_PERMISSION_REQUEST = 0x4d33;
     private static final String KSU_MANAGER_PACKAGE = "me.weishu.kernelsu";
     private static final String SHIZUKU_MANAGER_PACKAGE = "moe.shizuku.privileged.api";
+    private static final String KSU_RELEASES_URL = "https://github.com/tiann/KernelSU/releases";
+    /** Bundled LKM driver version (must match M3qRootEngine's pins). */
+    private static final int KSU_DRIVER_VERSION = 32525;
     private static final int STATUS_SUCCESS = 0xff18753c;
     private static final int STATUS_WORKING = 0xff9a6700;
     private static final int STATUS_WARNING = 0xffb3261e;
@@ -60,19 +76,63 @@ public final class MainActivity extends AppCompatActivity {
     private M3qRootEngine engine;
     private MaterialCardView statusCard;
     private MaterialCardView diagnosticsCard;
+    private MaterialCardView bannerCard;
     private TextView status;
     private TextView statusDetail;
-    private TextView dashboard;
+    private TextView statusVersion;
+    private TextView miniShizuku;
+    private TextView miniBoot;
+    private TextView bannerText;
+    private TextView infoManager;
+    private TextView infoKernel;
+    private TextView infoDevice;
+    private TextView infoFingerprint;
+    private TextView infoSelinux;
+    private TextView checkDevice;
+    private TextView checkShizuku;
+    private TextView checkKsu;
+    private TextView checkBoot;
     private TextView log;
+    private ImageView checkIcon;
+    private int bannerAction;
+    private String selinuxCache;
+    private int defaultSurface;
+    private int defaultOnSurfaceVariant;
+    private boolean showingSettle;
+    private final Runnable settleTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (running.get() || !showingSettle) return;
+            long remain = M3qRootEngine.bootSettleRemainingMillis();
+            if (remain <= 0) {
+                showingSettle = false;
+                worker.execute(() -> refreshRootState());
+                return;
+            }
+            long seconds = (remain + 999) / 1000;
+            String text = "Ready in ~" + seconds + "s";
+            miniBoot.setText(text);
+            checkBoot.setText(getString(R.string.check_format, "○", "This boot", text));
+            setStatusDetail("Supported device confirmed - ready in ~"
+                    + seconds + "s. Tap Recheck status then.");
+            ui.postDelayed(this, 1000);
+        }
+    };
     private MaterialButton run;
     private MaterialButton reapplyModules;
     private MaterialButton restartZygote;
     private MaterialButton statusRefresh;
+    private MaterialButton copyInfo;
     private MaterialButton diagnosticsToggle;
+    private SwitchMaterial bypassSettle;
+    private LinearProgressIndicator runProgress;
     private boolean diagnosticsVisible;
 
     @Override
     protected void onCreate(Bundle state) {
+        // Material You: use the wallpaper-based dynamic palette on Android 12+,
+        // fall back to the branded m3q_* colors on older releases.
+        DynamicColors.applyToActivityIfAvailable(this);
         super.onCreate(state);
         Shizuku.addRequestPermissionResultListener(shizukuPermissionListener);
         getWindow().setDecorFitsSystemWindows(false);
@@ -80,6 +140,10 @@ public final class MainActivity extends AppCompatActivity {
         applySystemBarInsets(findViewById(R.id.page_scroll));
         bindViews();
         bindActions();
+        defaultSurface = MaterialColors.getColor(this,
+                com.google.android.material.R.attr.colorSurface, 0xFFFFFFFF);
+        defaultOnSurfaceVariant = MaterialColors.getColor(this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant, 0xFF808080);
         getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> {
                     if (running.get()) {
@@ -100,6 +164,7 @@ public final class MainActivity extends AppCompatActivity {
                 append(line);
             }
         });
+        setupBypassToggle();
 
         append("==== device diagnostics ====");
         append("Model: " + Build.MODEL);
@@ -122,13 +187,30 @@ public final class MainActivity extends AppCompatActivity {
         diagnosticsCard = findViewById(R.id.diagnostics_card);
         status = findViewById(R.id.status);
         statusDetail = findViewById(R.id.status_detail);
-        dashboard = findViewById(R.id.dashboard);
+        statusVersion = findViewById(R.id.status_version);
+        checkIcon = findViewById(R.id.check_icon);
+        miniShizuku = findViewById(R.id.mini_shizuku_value);
+        miniBoot = findViewById(R.id.mini_boot_value);
+        bannerCard = findViewById(R.id.banner_card);
+        bannerText = findViewById(R.id.banner_text);
+        infoManager = findViewById(R.id.info_manager_value);
+        infoKernel = findViewById(R.id.info_kernel_value);
+        infoDevice = findViewById(R.id.info_device_value);
+        infoFingerprint = findViewById(R.id.info_fingerprint_value);
+        infoSelinux = findViewById(R.id.info_selinux_value);
+        checkDevice = findViewById(R.id.check_device);
+        checkShizuku = findViewById(R.id.check_shizuku);
+        checkKsu = findViewById(R.id.check_ksu);
+        checkBoot = findViewById(R.id.check_boot);
         log = findViewById(R.id.log);
         log.setMovementMethod(new ScrollingMovementMethod());
         run = findViewById(R.id.run);
         reapplyModules = findViewById(R.id.reapply_modules);
         restartZygote = findViewById(R.id.restart_zygote);
         statusRefresh = findViewById(R.id.status_refresh);
+        copyInfo = findViewById(R.id.copy_info);
+        runProgress = findViewById(R.id.run_progress);
+        bypassSettle = findViewById(R.id.bypass_settle);
         diagnosticsToggle = findViewById(R.id.diagnostics_toggle);
     }
 
@@ -152,6 +234,7 @@ public final class MainActivity extends AppCompatActivity {
         reapplyModules.setOnClickListener(v -> confirmModuleReload());
         restartZygote.setOnClickListener(v -> confirmSoftBoot());
         statusRefresh.setOnClickListener(v -> worker.execute(this::refreshRootState));
+        copyInfo.setOnClickListener(v -> copyDeviceInfo());
         findViewById(R.id.root_manager).setOnClickListener(v ->
                 openPackage(KSU_MANAGER_PACKAGE,
                         "KernelSU Manager is not installed."));
@@ -160,6 +243,49 @@ public final class MainActivity extends AppCompatActivity {
                         "Shizuku Manager is not installed."));
         findViewById(R.id.share_log).setOnClickListener(v -> shareLastLog());
         diagnosticsToggle.setOnClickListener(v -> toggleDiagnostics());
+        bannerCard.setOnClickListener(v -> onBannerClicked());
+    }
+
+    private void setupBypassToggle() {
+        // Deliberately not persisted: bypass resets every app launch so it
+        // always requires a conscious opt-in.
+        bypassSettle.setOnCheckedChangeListener((button, checked) -> {
+            if (!checked) {
+                engine.setBypassBootSettle(false);
+                append("Settle gate bypass disabled.");
+                if (!running.get()) worker.execute(this::refreshRootState);
+                return;
+            }
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.bypass_warning_title)
+                    .setMessage(R.string.bypass_warning_message)
+                    .setNegativeButton(R.string.cancel,
+                            (dialog, which) -> bypassSettle.setChecked(false))
+                    .setPositiveButton(R.string.bypass_warning_confirm,
+                            (dialog, which) -> {
+                                engine.setBypassBootSettle(true);
+                                append(getString(R.string.bypass_enabled_log));
+                                if (!running.get()) worker.execute(this::refreshRootState);
+                            })
+                    .setOnCancelListener(dialog -> bypassSettle.setChecked(false))
+                    .show();
+        });
+    }
+
+    private void onBannerClicked() {
+        if (bannerAction == 2) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(KSU_RELEASES_URL))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (RuntimeException error) {
+                append("Cannot open releases page: " + error.getMessage());
+            }
+            return;
+        }
+        if (bannerAction == 1) {
+            openPackage(KSU_MANAGER_PACKAGE,
+                    "KernelSU Manager is not installed.");
+        }
     }
 
     @Override
@@ -168,6 +294,12 @@ public final class MainActivity extends AppCompatActivity {
         if (engine != null && engine.isSupported() && !running.get()) {
             worker.execute(this::refreshRootState);
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        ui.removeCallbacks(settleTicker);
     }
 
     private void toggleDiagnostics() {
@@ -224,9 +356,14 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void confirmFreshRoot() {
+        String message = getString(R.string.root_dialog_message);
+        if (engine.isBypassBootSettle()
+                && M3qRootEngine.bootSettleRemainingMillis() > 0) {
+            message += "\n\n" + getString(R.string.root_dialog_bypass_warning);
+        }
         new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.root_dialog_title)
-                .setMessage(R.string.root_dialog_message)
+                .setMessage(message)
                 .setNegativeButton(R.string.cancel, null)
                 .setPositiveButton(R.string.root_dialog_confirm,
                         (dialog, which) -> startExploit())
@@ -263,11 +400,15 @@ public final class MainActivity extends AppCompatActivity {
 
     private void beginExploit(boolean useShizuku) {
         long settleMillis = M3qRootEngine.bootSettleRemainingMillis();
-        if (settleMillis > 0) {
+        if (settleMillis > 0 && !engine.isBypassBootSettle()) {
             long settleSeconds = (settleMillis + 999) / 1000;
             abortPendingRun("For post-boot system settling, retry in about " + settleSeconds
                     + "s. This boot's attempt was not consumed.");
             return;
+        }
+        if (settleMillis > 0) {
+            append("Settle gate bypassed with ~" + ((settleMillis + 999) / 1000)
+                    + "s remaining - panic risk is higher.");
         }
         if (!engine.markAttemptForThisBoot()) {
             abortPendingRun("Refused kernel run: boot state could not be verified.");
@@ -361,9 +502,11 @@ public final class MainActivity extends AppCompatActivity {
     private void finishMaintenance(int code, M3qRootEngine.RootState state,
                                    String successText, String successDetail) {
         running.set(false);
+        hideProgress();
         ui.post(() -> {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             statusRefresh.setEnabled(true);
+            copyInfo.setEnabled(true);
             renderRootState(state);
             if (code == 0) {
                 setStatus(successText, STATUS_SUCCESS);
@@ -382,22 +525,36 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void lockUiForRun() {
+        showingSettle = false;
+        ui.removeCallbacks(settleTicker);
         run.setEnabled(false);
         reapplyModules.setEnabled(false);
         restartZygote.setEnabled(false);
         statusRefresh.setEnabled(false);
+        copyInfo.setEnabled(false);
+        showProgress();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    private void showProgress() {
+        ui.post(() -> runProgress.setVisibility(View.VISIBLE));
+    }
+
+    private void hideProgress() {
+        ui.post(() -> runProgress.setVisibility(View.GONE));
     }
 
     private void abortPendingRun(String message) {
         append(message);
         running.set(false);
+        hideProgress();
         ui.post(() -> {
             run.setVisibility(View.VISIBLE);
             run.setEnabled(engine.isSupported());
             reapplyModules.setEnabled(false);
             restartZygote.setEnabled(false);
             statusRefresh.setEnabled(true);
+            copyInfo.setEnabled(true);
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             setStatus("Not run", STATUS_NEUTRAL);
             setStatusDetail(message);
@@ -410,32 +567,60 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void renderRootState(M3qRootEngine.RootState state) {
+        showingSettle = false;
+        ui.removeCallbacks(settleTicker);
         if (state.terminationUnconfirmed()) {
             run.setVisibility(View.VISIBLE);
             setStatus("Task status unknown", STATUS_WARNING);
             setStatusDetail("For safety, reboot the device and check again.");
+            setStatusVersion(getString(R.string.version_unknown));
+            styleStatusCard(false);
             run.setText(R.string.run_reboot_check);
             run.setEnabled(false);
         } else if (state.ready()) {
-            setStatus("Temporary root active", STATUS_SUCCESS);
-            setStatusDetail("KernelSU 3.2.5 - removed on reboot");
+            setStatus("Working <LKM>", STATUS_SUCCESS);
+            setStatusDetail("[Temp root mode] · removed on reboot");
+            setStatusVersion(getString(R.string.version_format, KSU_DRIVER_VERSION));
+            styleStatusCard(true);
             run.setVisibility(View.GONE);
         } else if (state.bootstrap()) {
             run.setVisibility(View.VISIBLE);
             setStatus("Root ready", STATUS_WORKING);
             setStatusDetail("Only the KernelSU activation step remains.");
+            setStatusVersion(getString(R.string.version_unknown));
+            styleStatusCard(false);
             run.setText(R.string.run_kernel_su_activate);
             run.setEnabled(true);
         } else if (engine.hasAttemptedThisBoot()) {
             run.setVisibility(View.VISIBLE);
             setStatus("Already ran in this boot", STATUS_WARNING);
             setStatusDetail("For safety, cannot run again before rebooting.");
+            setStatusVersion(getString(R.string.version_unknown));
+            styleStatusCard(false);
             run.setText(R.string.run_reboot_retry);
             run.setEnabled(false);
         } else {
             run.setVisibility(View.VISIBLE);
-            setStatus("Temporary root inactive", STATUS_NEUTRAL);
-            setStatusDetail("Supported device confirmed - ready to run");
+            setStatus("Not rooted", STATUS_NEUTRAL);
+            long settleMillis = M3qRootEngine.bootSettleRemainingMillis();
+            if (settleMillis > 0 && engine.isBypassBootSettle()) {
+                setStatusDetail("Supported device confirmed - ready to run "
+                        + "(settle gate bypassed, higher panic risk).");
+            } else if (settleMillis > 0) {
+                long settleSeconds = (settleMillis + 999) / 1000;
+                long uptimeSeconds = SystemClock.elapsedRealtime() / 1000;
+                setStatusDetail("Supported device confirmed - ready in ~"
+                        + settleSeconds + "s (uptime " + uptimeSeconds
+                        + "s of 180s). Tap Recheck status then.");
+                // Live countdown: tick every second until the settle window
+                // passes, then auto-refresh once.
+                showingSettle = true;
+                ui.postDelayed(settleTicker, 1000);
+            } else {
+                setStatusDetail("Supported device confirmed - ready to run");
+            }
+            setStatusVersion(getString(R.string.version_unknown));
+            styleStatusCard(false);
             run.setText(R.string.root_activate);
             run.setEnabled(engine.isSupported());
         }
@@ -443,10 +628,13 @@ public final class MainActivity extends AppCompatActivity {
         reapplyModules.setEnabled(maintenanceReady);
         restartZygote.setEnabled(maintenanceReady);
         statusRefresh.setEnabled(!running.get());
+        copyInfo.setEnabled(!running.get());
+        hideProgress();
         renderDashboard(state);
     }
 
     private void renderDashboard(M3qRootEngine.RootState state) {
+        styleStatusCard(state.ready());
         boolean shizukuRunning = ShizukuShell.isRunning();
         boolean shizukuGranted = ShizukuShell.isGranted();
         int shizukuUid = ShizukuShell.uid();
@@ -454,15 +642,171 @@ public final class MainActivity extends AppCompatActivity {
                 : !shizukuGranted ? "Approval needed"
                 : (shizukuUid == 2000 || shizukuUid == 0)
                 ? "Connected" : "Restricted";
-        String rootState = state.terminationUnconfirmed() ? "Check needed"
-                : state.ready() ? "Active"
-                : state.bootstrap() ? "Ready" : "Inactive";
-        String manager = getPackageManager().getLaunchIntentForPackage(
-                KSU_MANAGER_PACKAGE) == null ? "Needs install" : "Installed";
-        String attempted = engine.hasAttemptedThisBoot() ? "Ran" : "Not run";
-        dashboard.setText(getString(R.string.dashboard_format,
-                engine.isSupported() ? "Supported" : "Not supported",
-                shizuku, rootState, manager, attempted));
+        PackageInfo managerInfo = kernelSuManagerInfo();
+        String manager = managerInfo == null ? "Needs install" : "Installed";
+        miniShizuku.setText(shizuku);
+        long settleMillis = M3qRootEngine.bootSettleRemainingMillis();
+        String boot;
+        if (engine.hasAttemptedThisBoot()) {
+            boot = "Ran";
+        } else if (settleMillis > 0 && engine.isBypassBootSettle()) {
+            boot = getString(R.string.boot_bypassed);
+        } else if (settleMillis > 0) {
+            boot = "Ready in ~" + ((settleMillis + 999) / 1000) + "s";
+        } else {
+            boot = "Ready";
+        }
+        miniBoot.setText(boot);
+        infoManager.setText(managerInfo == null
+                ? getString(R.string.info_manager_missing)
+                : formatManagerVersion(managerInfo));
+        infoKernel.setText(System.getProperty("os.version", "unknown"));
+        infoDevice.setText(deviceMarketingName());
+        infoFingerprint.setText(Build.FINGERPRINT);
+        infoSelinux.setText(selinuxStatus());
+        updateBanner(managerInfo);
+        renderChecklist(shizukuRunning, shizukuGranted, shizukuUid, manager);
+    }
+
+    private void styleStatusCard(boolean active) {
+        if (active) {
+            statusCard.setCardBackgroundColor(0xFF1D5C34);
+            statusCard.setStrokeColor(0xFF1D5C34);
+            status.setTextColor(0xFFFFFFFF);
+            statusDetail.setTextColor(0xFFE8F5E9);
+            statusVersion.setTextColor(0xFFB9E6C5);
+            checkIcon.setVisibility(View.VISIBLE);
+            return;
+        }
+        statusCard.setCardBackgroundColor(defaultSurface);
+        statusDetail.setTextColor(defaultOnSurfaceVariant);
+        statusVersion.setTextColor(defaultOnSurfaceVariant);
+        checkIcon.setVisibility(View.GONE);
+    }
+
+    private void updateBanner(PackageInfo managerInfo) {
+        if (managerInfo == null) {
+            bannerAction = 1;
+            bannerText.setText(R.string.banner_manager_missing);
+            bannerCard.setVisibility(View.VISIBLE);
+            return;
+        }
+        if (managerInfo.getLongVersionCode() != KSU_DRIVER_VERSION) {
+            bannerAction = 2;
+            bannerText.setText(getString(R.string.banner_manager_mismatch,
+                    formatManagerVersion(managerInfo), KSU_DRIVER_VERSION));
+            bannerCard.setVisibility(View.VISIBLE);
+            return;
+        }
+        bannerAction = 0;
+        bannerCard.setVisibility(View.GONE);
+    }
+
+    private static String formatManagerVersion(PackageInfo info) {
+        String name = info.versionName == null ? "?" : info.versionName;
+        if (!name.startsWith("v")) name = "v" + name;
+        return name + " (" + info.getLongVersionCode() + ")";
+    }
+
+    private PackageInfo kernelSuManagerInfo() {
+        try {
+            return getPackageManager().getPackageInfo(KSU_MANAGER_PACKAGE,
+                    PackageManager.PackageInfoFlags.of(0));
+        } catch (PackageManager.NameNotFoundException e) {
+            return null;
+        }
+    }
+
+    private static String deviceMarketingName() {
+        if ("SM-S948U".equals(Build.MODEL)) return "Samsung Galaxy S26 Ultra";
+        String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
+        if (!manufacturer.isEmpty()) {
+            manufacturer = manufacturer.substring(0, 1).toUpperCase()
+                    + manufacturer.substring(1);
+        }
+        return (manufacturer + " " + Build.MODEL).trim();
+    }
+
+    private String selinuxStatus() {
+        if (selinuxCache != null) return selinuxCache;
+        String result = readEnforceFile();
+        if (result == null) result = reflectEnforce();
+        if (result == null) result = "Unknown";
+        selinuxCache = result;
+        return result;
+    }
+
+    private static String readEnforceFile() {
+        try (BufferedReader in = new BufferedReader(new FileReader("/sys/fs/selinux/enforce"))) {
+            String line = in.readLine();
+            if (line != null) {
+                line = line.trim();
+                if ("1".equals(line)) return "Enforcing";
+                if ("0".equals(line)) return "Permissive";
+            }
+        } catch (IOException ignored) {
+        }
+        return null;
+    }
+
+    private static String reflectEnforce() {
+        // /sys/fs/selinux/enforce is often unreadable to apps; fall back to
+        // the platform SELinux flag via reflection.
+        try {
+            Class<?> selinux = Class.forName("android.os.SELinux");
+            Object enforced = selinux.getMethod("isSELinuxEnforced").invoke(null);
+            if (enforced instanceof Boolean) return (Boolean) enforced ? "Enforcing" : "Permissive";
+            Object enabled = selinux.getMethod("isSELinuxEnabled").invoke(null);
+            if (enabled instanceof Boolean && !(Boolean) enabled) return "Disabled";
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+        return null;
+    }
+
+    private void renderChecklist(boolean shizukuRunning, boolean shizukuGranted,
+                                 int shizukuUid, String manager) {
+        boolean supported = engine.isSupported();
+        checkDevice.setText(getString(R.string.check_format,
+                supported ? "✓" : "✕", "Device", supported ? "Supported" : "Not supported"));
+        String shizukuMark;
+        String shizukuValue;
+        if (!shizukuRunning) {
+            shizukuMark = "○";
+            shizukuValue = "Not connected";
+        } else if (!shizukuGranted) {
+            shizukuMark = "○";
+            shizukuValue = "Approval needed";
+        } else if (shizukuUid == 2000 || shizukuUid == 0) {
+            shizukuMark = "✓";
+            shizukuValue = "Connected";
+        } else {
+            shizukuMark = "○";
+            shizukuValue = "Restricted";
+        }
+        checkShizuku.setText(getString(R.string.check_format,
+                shizukuMark, "Shizuku", shizukuValue));
+        boolean ksuInstalled = !"Needs install".equals(manager);
+        checkKsu.setText(getString(R.string.check_format,
+                ksuInstalled ? "✓" : "○", "KernelSU app",
+                ksuInstalled ? "Installed" : "Needs install"));
+        long settleMillis = M3qRootEngine.bootSettleRemainingMillis();
+        String bootMark;
+        String bootValue;
+        if (engine.hasAttemptedThisBoot()) {
+            bootMark = "○";
+            bootValue = "Already ran — reboot to retry";
+        } else if (settleMillis > 0 && engine.isBypassBootSettle()) {
+            bootMark = "○";
+            bootValue = getString(R.string.boot_bypassed);
+        } else if (settleMillis > 0) {
+            bootMark = "○";
+            bootValue = "Ready in ~" + ((settleMillis + 999) / 1000) + "s";
+        } else {
+            bootMark = "✓";
+            bootValue = "Ready";
+        }
+        checkBoot.setText(getString(R.string.check_format,
+                bootMark, "This boot", bootValue));
     }
 
     private void finishRun(M3qRootEngine.RootState state) {
@@ -471,12 +815,15 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         running.set(false);
+        hideProgress();
         ui.post(() -> {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             statusRefresh.setEnabled(true);
+            copyInfo.setEnabled(true);
             if (state.ready()) {
-                setStatus("Temporary root active", STATUS_SUCCESS);
-                setStatusDetail("KernelSU 3.2.5 - removed on reboot");
+                setStatus("Working <LKM>", STATUS_SUCCESS);
+                setStatusDetail("[Temp root mode] · removed on reboot");
+                setStatusVersion(getString(R.string.version_format, KSU_DRIVER_VERSION));
                 run.setVisibility(View.GONE);
                 openPackage(KSU_MANAGER_PACKAGE,
                         "KernelSU Manager is not installed.");
@@ -500,6 +847,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void finishUnconfirmedRun() {
         running.set(false);
+        hideProgress();
         append("Process control lost; termination unproven. Do not retry before rebooting.");
         ui.post(() -> {
             run.setVisibility(View.VISIBLE);
@@ -511,19 +859,67 @@ public final class MainActivity extends AppCompatActivity {
             reapplyModules.setEnabled(false);
             restartZygote.setEnabled(false);
             statusRefresh.setEnabled(true);
+            copyInfo.setEnabled(true);
         });
     }
 
     private void openPackage(String packageName, String missingMessage) {
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
-        if (launch == null) {
-            append(missingMessage);
-            setStatus("Cannot open manager app", STATUS_NEUTRAL);
-            setStatusDetail(missingMessage);
+        if (launch != null) {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(launch);
             return;
         }
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(launch);
+        append(missingMessage);
+        // More useful: offer a one-tap install/update route instead of a dead end.
+        String storeUrl = null;
+        String webUrl = null;
+        if (SHIZUKU_MANAGER_PACKAGE.equals(packageName)) {
+            storeUrl = "market://details?id=" + packageName;
+            webUrl = "https://play.google.com/store/apps/details?id=" + packageName;
+        } else if (KSU_MANAGER_PACKAGE.equals(packageName)) {
+            webUrl = KSU_RELEASES_URL;
+        }
+        if (storeUrl != null) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(storeUrl))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return;
+            } catch (RuntimeException ignored) {
+                // Fall through to the web URL.
+            }
+        }
+        if (webUrl != null) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(webUrl))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return;
+            } catch (RuntimeException ignored) {
+                // Fall through to the status message.
+            }
+        }
+        setStatus("Cannot open manager app", STATUS_NEUTRAL);
+        setStatusDetail(missingMessage);
+    }
+
+    private void copyDeviceInfo() {
+        PackageInfo managerInfo = kernelSuManagerInfo();
+        String info = "Model: " + Build.MODEL + "\n"
+                + "Kernel: " + System.getProperty("os.version", "unknown") + "\n"
+                + "Firmware: " + Build.FINGERPRINT + "\n"
+                + "Manager: " + (managerInfo == null ? "not installed"
+                        : formatManagerVersion(managerInfo)) + "\n"
+                + "SELinux: " + selinuxStatus() + "\n"
+                + "Status: " + status.getText() + " / " + statusDetail.getText();
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            append("Clipboard is not available on this device.");
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText(
+                getString(R.string.share_subject), info));
+        append(getString(R.string.device_info_copied));
     }
 
     private void shareLastLog() {
@@ -578,6 +974,10 @@ public final class MainActivity extends AppCompatActivity {
 
     private void setStatusDetail(String text) {
         ui.post(() -> statusDetail.setText(text));
+    }
+
+    private void setStatusVersion(String text) {
+        ui.post(() -> statusVersion.setText(text));
     }
 
     private void append(String line) {

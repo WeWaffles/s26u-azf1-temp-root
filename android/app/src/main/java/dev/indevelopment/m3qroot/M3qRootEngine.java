@@ -82,6 +82,7 @@ final class M3qRootEngine {
 
     private final Context context;
     private final Listener listener;
+    private volatile boolean bypassBootSettle;
 
     M3qRootEngine(Context context, Listener listener) {
         Objects.requireNonNull(context, "context");
@@ -317,8 +318,16 @@ final class M3qRootEngine {
         return RootSafetyPolicy.bootSettleRemainingMillis(SystemClock.elapsedRealtime());
     }
 
+    void setBypassBootSettle(boolean bypass) {
+        bypassBootSettle = bypass;
+    }
+
+    boolean isBypassBootSettle() {
+        return bypassBootSettle;
+    }
+
     boolean markAttemptForThisBoot() {
-        if (bootSettleRemainingMillis() > 0) return false;
+        if (!bypassBootSettle && bootSettleRemainingMillis() > 0) return false;
         synchronized (ATTEMPT_LOCK) {
             String bootId = currentBootId();
             if (bootId.isEmpty()) return false;

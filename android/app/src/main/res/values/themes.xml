@@ -17,8 +17,9 @@
         <item name="colorOutlineVariant">@color/m3q_outline_variant</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">@color/m3q_background</item>
-        <item name="android:statusBarColor">@color/m3q_background</item>
-        <item name="android:navigationBarColor">@color/m3q_background</item>
+        <!-- Transparent bars let the Material You dynamic surfaces blend edge-to-edge. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">@bool/m3q_light_system_bars</item>
         <item name="android:windowLightNavigationBar">@bool/m3q_light_system_bars</item>
     </style>
