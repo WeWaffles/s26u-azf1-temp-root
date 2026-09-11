@@ -35,11 +35,13 @@
     <string name="root_permissions">Manage root permissions</string>
     <string name="shizuku_settings">Shizuku settings</string>
     <string name="share_diagnostics">Share diagnostics report</string>
+    <string name="copy_log">Copy log</string>
+    <string name="log_copied">Diagnostics log copied to clipboard.</string>
     <string name="show_diagnostics">Show diagnostics log</string>
     <string name="hide_diagnostics">Hide diagnostics log</string>
     <string name="diagnostics_title">Advanced diagnostics log</string>
     <string name="diagnostics_description">Technical info and run history. Not needed for normal use.</string>
-    <string name="version_label">v0.5.9-azf1</string>
+    <string name="version_label">v0.5.10-azf1</string>
     <string name="cancel">Cancel</string>
     <string name="root_dialog_title">Activate temporary root?</string>
     <string name="root_dialog_message">RAM-only method for SM-S948U AZF1 only. Requires an already-running and authorized Shizuku server. System partitions and Knox are not modified, and root is removed on reboot.\n\nThe device may reboot during the run, so save important work first. After success, per-app root permissions are managed in KernelSU.</string>

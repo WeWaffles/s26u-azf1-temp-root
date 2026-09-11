@@ -588,13 +588,28 @@
                     android:orientation="vertical"
                     android:padding="16dp">
 
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
                     <TextView
-                        android:layout_width="match_parent"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
+                        android:layout_weight="1"
                         android:text="@string/diagnostics_title"
                         android:textColor="@color/m3q_log_text"
                         android:textSize="15sp"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/copy_log"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/copy_log" />
+                </LinearLayout>
 
                     <TextView
                         android:layout_width="match_parent"
@@ -604,10 +619,10 @@
                         android:textColor="#99D7E2EC"
                         android:textSize="11sp" />
 
-                    <TextView
-                        android:id="@+id/log"
-                        android:layout_width="match_parent"
-                        android:layout_height="220dp"
+                <TextView
+                    android:id="@+id/log"
+                    android:layout_width="match_parent"
+                    android:layout_height="300dp"
                         android:layout_marginTop="10dp"
                         android:fadeScrollbars="false"
                         android:fontFamily="monospace"

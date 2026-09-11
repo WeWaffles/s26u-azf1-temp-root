@@ -13,6 +13,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -32,14 +33,18 @@ import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.switchmaterial.SwitchMaterial;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 import rikka.shizuku.Shizuku;
 
@@ -50,6 +55,8 @@ public final class MainActivity extends AppCompatActivity {
     private static final String KSU_RELEASES_URL = "https://github.com/tiann/KernelSU/releases";
     /** Bundled LKM driver version (must match M3qRootEngine's pins). */
     private static final int KSU_DRIVER_VERSION = 32525;
+    /** Escape sequences the payloads emit for terminals; the log view is not one. */
+    private static final Pattern ANSI_ESCAPE = Pattern.compile("\u001B\\[[0-9;]*[A-Za-z]");
     private static final int STATUS_SUCCESS = 0xff18753c;
     private static final int STATUS_WORKING = 0xff9a6700;
     private static final int STATUS_WARNING = 0xffb3261e;
@@ -165,6 +172,9 @@ public final class MainActivity extends AppCompatActivity {
             }
         });
         setupBypassToggle();
+        // One session file per app launch; every log line lands here so any
+        // run (including oracle-only failures) is shareable and pullable.
+        resetSessionLog();
 
         append("==== device diagnostics ====");
         append("Model: " + Build.MODEL);
@@ -204,6 +214,17 @@ public final class MainActivity extends AppCompatActivity {
         checkBoot = findViewById(R.id.check_boot);
         log = findViewById(R.id.log);
         log.setMovementMethod(new ScrollingMovementMethod());
+        // Let the log view scroll internally instead of fighting the page scroll.
+        log.setOnTouchListener((v, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                v.getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL) {
+                v.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
         run = findViewById(R.id.run);
         reapplyModules = findViewById(R.id.reapply_modules);
         restartZygote = findViewById(R.id.restart_zygote);
@@ -242,6 +263,7 @@ public final class MainActivity extends AppCompatActivity {
                 openPackage(SHIZUKU_MANAGER_PACKAGE,
                         "Shizuku Manager is not installed."));
         findViewById(R.id.share_log).setOnClickListener(v -> shareLastLog());
+        findViewById(R.id.copy_log).setOnClickListener(v -> copySessionLog());
         diagnosticsToggle.setOnClickListener(v -> toggleDiagnostics());
         bannerCard.setOnClickListener(v -> onBannerClicked());
     }
@@ -902,6 +924,61 @@ public final class MainActivity extends AppCompatActivity {
         setStatusDetail(missingMessage);
     }
 
+    private static String stripAnsi(String line) {
+        return ANSI_ESCAPE.matcher(line).replaceAll("");
+    }
+
+    private File sessionLogFile() {
+        File dir = getExternalFilesDir(null);
+        if (dir == null) dir = getFilesDir();
+        return new File(dir, "session.log");
+    }
+
+    private void resetSessionLog() {
+        worker.execute(() -> {
+            try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(
+                    new FileOutputStream(sessionLogFile(), false), StandardCharsets.UTF_8))) {
+                out.write("=== session " + Build.MODEL + " "
+                        + System.currentTimeMillis());
+                out.newLine();
+            } catch (IOException ignored) {
+            }
+        });
+    }
+
+    private void writeSessionLine(String line) {
+        worker.execute(() -> {
+            try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(
+                    new FileOutputStream(sessionLogFile(), true), StandardCharsets.UTF_8))) {
+                out.write(line);
+                out.newLine();
+            } catch (IOException ignored) {
+            }
+        });
+    }
+
+    private void copySessionLog() {
+        File file = sessionLogFile();
+        if (!file.isFile() || file.length() == 0) {
+            append("No session log yet.");
+            return;
+        }
+        try {
+            String text = LogRedactor.redact(readLogTail(file));
+            ClipboardManager clipboard =
+                    (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) {
+                append("Clipboard is not available on this device.");
+                return;
+            }
+            clipboard.setPrimaryClip(ClipData.newPlainText(
+                    getString(R.string.share_subject), text));
+            append(getString(R.string.log_copied));
+        } catch (IOException error) {
+            append("Log read failed: " + error.getMessage());
+        }
+    }
+
     private void copyDeviceInfo() {
         PackageInfo managerInfo = kernelSuManagerInfo();
         String info = "Model: " + Build.MODEL + "\n"
@@ -923,7 +1000,9 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void shareLastLog() {
-        File file = engine.lastRootLog();
+        File session = sessionLogFile();
+        File file = (session.isFile() && session.length() > 0)
+                ? session : engine.lastRootLog();
         if (!file.isFile()) {
             append("No run log to share yet.");
             setStatus("No diagnostics report", STATUS_NEUTRAL);
@@ -981,8 +1060,10 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void append(String line) {
+        String clean = stripAnsi(line);
+        writeSessionLine(clean);
         ui.post(() -> {
-            log.append(line + "\n");
+            log.append(clean + "\n");
             if (diagnosticsVisible) {
                 scrollLogToBottom();
             }
