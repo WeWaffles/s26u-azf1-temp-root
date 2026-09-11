@@ -30,11 +30,10 @@ fyi this was done with ai because I'm a lazy bum
 The app checks the model, full build fingerprint, and kernel release before
 enabling a kernel action. Any mismatch is rejected.
 
-> **Shizuku is strongly recommended and effectively required for the best
-> result.** The fallback route remains available, but an already-running and
-> authorized Shizuku server enables the fast tracefs KASLR route. In
-> practice, prepare Shizuku first to greatly improve root speed and the
-> chance of a successful run.
+> **Shizuku is required.** Start the Shizuku server via ADB and authorize
+> this app before running. The unprivileged physical-P0 fallback is disabled
+> on AZF1: on this kernel its slide scan never converges and repeated runs
+> caused kernel panics.
 
 ## App functions
 

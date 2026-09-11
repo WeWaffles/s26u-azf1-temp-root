@@ -42,8 +42,9 @@
     <string name="version_label">v0.5.9-azf1</string>
     <string name="cancel">Cancel</string>
     <string name="root_dialog_title">Activate temporary root?</string>
-    <string name="root_dialog_message">RAM-only method for SM-S948U AZF1 only. System partitions and Knox are not modified, and root is removed on reboot.\n\nThe device may reboot during the run, so save important work first. After success, per-app root permissions are managed in KernelSU.</string>
+    <string name="root_dialog_message">RAM-only method for SM-S948U AZF1 only. Requires an already-running and authorized Shizuku server. System partitions and Knox are not modified, and root is removed on reboot.\n\nThe device may reboot during the run, so save important work first. After success, per-app root permissions are managed in KernelSU.</string>
     <string name="root_dialog_confirm">Activate root</string>
+    <string name="shizuku_required_message">Shizuku is required: start the Shizuku server via ADB and authorize this app, then retry. The unprivileged fallback is disabled on AZF1 after repeated scan timeouts and kernel panics. This boot\'s attempt was not consumed.</string>
     <string name="soft_root_dialog_title">Reload KernelSU modules?</string>
     <string name="soft_root_dialog_message">Reruns the late-load, mount, and service stages of all currently active KernelSU modules. Other modules run too, so disable any suspect module first.\n\nThis does not restart the kernel or the Android app runtime. Run ‘soft boot’ when done.</string>
     <string name="soft_root_dialog_confirm">Reload modules</string>

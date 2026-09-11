@@ -375,27 +375,27 @@ public final class MainActivity extends AppCompatActivity {
         lockUiForRun();
         append("==== fresh-root start ====");
 
-        if (ShizukuShell.isRunning()) {
-            int uid = ShizukuShell.uid();
-            append("Shizuku detected: uid=" + uid + " - tracefs fast path");
-            if (!ShizukuShell.isGranted()) {
-                setStatus("Shizuku permission approval needed", STATUS_WORKING);
-                setStatusDetail("Approve the Shizuku permission request shown.");
-                try {
-                    shizukuPermissionPending.set(true);
-                    Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST);
-                } catch (RuntimeException error) {
-                    shizukuPermissionPending.set(false);
-                    abortPendingRun("Shizuku permission request error: " + error.getMessage());
-                }
-                return;
-            }
-            beginExploit(true);
+        // Shizuku-only: the unprivileged physical-P0 fallback is disabled on
+        // AZF1 after repeated 45-120s scan timeouts and kernel panics.
+        if (!ShizukuShell.isRunning()) {
+            abortPendingRun(getString(R.string.shizuku_required_message));
             return;
         }
-
-        append("Shizuku is not running, using the exact-Image physical-P0 path.");
-        beginExploit(false);
+        int uid = ShizukuShell.uid();
+        append("Shizuku detected: uid=" + uid + " - tracefs fast path");
+        if (!ShizukuShell.isGranted()) {
+            setStatus("Shizuku permission approval needed", STATUS_WORKING);
+            setStatusDetail("Approve the Shizuku permission request shown.");
+            try {
+                shizukuPermissionPending.set(true);
+                Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST);
+            } catch (RuntimeException error) {
+                shizukuPermissionPending.set(false);
+                abortPendingRun("Shizuku permission request error: " + error.getMessage());
+            }
+            return;
+        }
+        beginExploit(true);
     }
 
     private void beginExploit(boolean useShizuku) {
