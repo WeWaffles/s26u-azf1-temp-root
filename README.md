@@ -16,6 +16,8 @@ to English.
 
 fyi this was done with ai because I'm a lazy bum
 
+DO NOT USE THIS, USE https://github.com/diabl0w/DFRoot IT IS MUCH BETTER AND IT'S ACTUALLY MAINTAINED
+
 ## Supported target
 
 | Field | Required value |
